@@ -15,23 +15,25 @@ import (
 var db *sql.DB
 
 type User struct {
-	UserID           int    `json:"user_id"`
-	Username         string `json:"username"`
-	Password         string `json:"password"`
-	Role             string `json:"role"`
-	OtherUserDetails string `json:"other_user_details"`
+	UserID   int    `json:"user_id"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	RoleID   int    `json:"role_id"`
+	// Role             string `json:"role"`
+	// OtherUserDetails string `json:"other_user_details"`
 }
 
 type Notification struct {
-	NotificationID           int    `json:"notification_id"`
-	Content                  string `json:"content"`
-	Timestamp                string `json:"timestamp"`
-	OtherNotificationDetails string `json:"other_notification_details"`
+	NotificationID int    `json:"notification_id"`
+	Title          string `json: "title"`
+	Content        string `json:"content"`
+	Timestamp      string `json:"timestamp"`
+	// OtherNotificationDetails string `json:"other_notification_details"`
 }
 
 func main() {
 	var err error
-	db, err = sql.Open("postgres", "postgresql://postgres:thu123@localhost/test?sslmode=disable")
+	db, err = sql.Open("postgres", "postgresql://postgres:thu123@localhost/test2?sslmode=disable")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -55,7 +57,7 @@ func registerUser(c *gin.Context) {
 	}
 
 	var existingUser User
-	err := db.QueryRow("select user_id, username, password, role, other_user_details from \"User\" where username = $1", user.Username).Scan(&existingUser.UserID, &existingUser.Username, &existingUser.Password, &existingUser.Role, &existingUser.OtherUserDetails)
+	err := db.QueryRow("select username from users where username = $1", user.Username).Scan(&existingUser.UserID, &existingUser.Username, &existingUser.Password, &existingUser.RoleID)
 	if err == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Username already exists"})
 		return
@@ -68,8 +70,8 @@ func registerUser(c *gin.Context) {
 	passwordHash := md5.Sum([]byte(user.Password))
 	user.Password = hex.EncodeToString(passwordHash[:])
 
-	_, err = db.Exec("insert into \"User\" (user_id, username, password, role, other_user_details) values ($1, $2, $3, $4, $5)",
-		user.UserID, user.Username, user.Password, user.Role, user.OtherUserDetails)
+	_, err = db.Exec("insert into users (username, password, role_id) values ($1, $2, $3)",
+		user.Username, user.Password, user.RoleID)
 	if err != nil {
 		log.Println(err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to register user"})
@@ -92,10 +94,10 @@ func loginUser(c *gin.Context) {
 	passwordHash := md5.Sum([]byte(user.Password))
 	user.Password = hex.EncodeToString(passwordHash[:])
 
-	row := db.QueryRow("select user_id, username, role, other_user_details from \"User\" where username = $1 and password = $2",
+	row := db.QueryRow("select user_id, username, role_id from users where username = $1 and password = $2",
 		user.Username, user.Password)
 
-	if err := row.Scan(&user.UserID, &user.Username, &user.Role, &user.OtherUserDetails); err != nil {
+	if err := row.Scan(&user.UserID, &user.Username, &user.RoleID); err != nil {
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 			return
@@ -109,7 +111,7 @@ func loginUser(c *gin.Context) {
 }
 
 func getAllNotifications(c *gin.Context) {
-	rows, err := db.Query("select notification_id, content, timestamp, other_notification_details from Notification")
+	rows, err := db.Query("select notification_id, title, message, created_at from notifications")
 	if err != nil {
 		log.Println(err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
@@ -120,7 +122,7 @@ func getAllNotifications(c *gin.Context) {
 	var notifications []Notification
 	for rows.Next() {
 		var notification Notification
-		err := rows.Scan(&notification.NotificationID, &notification.Content, &notification.Timestamp, &notification.OtherNotificationDetails)
+		err := rows.Scan(&notification.NotificationID, &notification.Title, &notification.Content, &notification.Timestamp)
 		if err != nil {
 			log.Println(err)
 			continue
@@ -144,7 +146,20 @@ func getUserNotifications(c *gin.Context) {
 		return
 	}
 
-	rows, err := db.Query("select Notification.notification_id, content, timestamp, other_notification_details from Notification join Notification_Recipients on Notification.notification_id = Notification_Recipients.notification_id where Notification_Recipients.recipient_id = $1", userID)
+	rows, err := db.Query(` select n.notification_id, n.title, n.message, n.created_at
+	from notifications n
+	inner join notification_users nu on n.notification_id = nu.notification_id
+	where nu.user_id = $1
+	
+	union
+	
+	select n.notification_id, n.title, n.message, n.created_at
+	from notifications n
+	inner join notification_roles nr on n.notification_id = nr.notification_id
+	where nr.role_id in (select role_id from users where user_id = $1)
+	
+	order by notification_id asc;
+	`, userID)
 	if err != nil {
 		log.Println(err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
@@ -155,7 +170,7 @@ func getUserNotifications(c *gin.Context) {
 	var notifications []Notification
 	for rows.Next() {
 		var notification Notification
-		err := rows.Scan(&notification.NotificationID, &notification.Content, &notification.Timestamp, &notification.OtherNotificationDetails)
+		err := rows.Scan(&notification.NotificationID, &notification.Title, &notification.Content, &notification.Timestamp)
 		if err != nil {
 			log.Println(err)
 			continue
